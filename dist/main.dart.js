@@ -7417,7 +7417,7 @@ l.toString
 q=l
 s=1
 break}s=3
-return A.T(A.aqw(A.fd("https://YOUR-VERCEL-DOMAIN.vercel.app/api/token"),null),$async$abc)
+return A.T(A.aqw(A.fd("https://bus-route-finder-zeta.vercel.app/api/token"),null),$async$abc)
 case 3:o=b
 l=o.b
 if(l!==200)throw A.i(A.cU("\u53d6\u5f97\u6388\u6b0a\u5931\u6557(\u72c0\u614b\u78bc "+l+"),\u8acb\u78ba\u8a8d\u5f8c\u7aef proxy \u662f\u5426\u90e8\u7f72\u6210\u529f"))

@@ -30,8 +30,7 @@ class RouteSearchResult {
 /// Token 透過後端 proxy(/api/token,見專案根目錄 api/token.js)取得,
 /// TDX 的 Client ID / Secret 只存在後端環境變數,前端程式完全不會碰到金鑰。
 class TdxService {
-  // 部署到 Vercel 後,把這個換成實際拿到的網域(例如 https://bus-route-finder.vercel.app)
-  static const String _proxyBase = 'https://YOUR-VERCEL-DOMAIN.vercel.app';
+  static const String _proxyBase = 'https://bus-route-finder-zeta.vercel.app';
   static const String _apiBase = 'https://tdx.transportdata.tw/api/basic';
 
   // 公車路線常常跨縣市,所以查詢時把所有縣市的市公車,加上不分縣市的公路客運,全部一起查
