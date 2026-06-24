@@ -148,7 +148,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('公車起訖站查詢')),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -210,19 +210,11 @@ class _BusQueryPageState extends State<BusQueryPage> {
             if (noResultsAtAll) const Text('輸入起訖站後按查詢,結果會列在這裡'),
             _buildSuggestionSection('起站', _startSuggestions, _startController),
             _buildSuggestionSection('迄站', _endSuggestions, _endController),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _results.length,
-                itemBuilder: (context, index) {
-                  final route = _results[index];
-                  return ListTile(
-                    leading: const Icon(Icons.directions_bus),
-                    title: Text(route.routeName),
-                    subtitle: Text('${route.area} · ${route.directionLabel}'),
-                  );
-                },
-              ),
-            ),
+            ..._results.map((route) => ListTile(
+                  leading: const Icon(Icons.directions_bus),
+                  title: Text(route.routeName),
+                  subtitle: Text('${route.area} · ${route.directionLabel}'),
+                )),
           ],
         ),
       ),
