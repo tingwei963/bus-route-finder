@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'services/tdx_service.dart';
 
 void main() {
@@ -87,6 +88,36 @@ class _BusQueryPageState extends State<BusQueryPage> {
     }
   }
 
+  Future<void> _runDiagnostics() async {
+    final urls = {
+      'Google': 'https://www.google.com',
+      'TDX': 'https://tdx.transportdata.tw',
+      'Vercel proxy': 'https://bus-route-finder-zeta.vercel.app/api/token',
+    };
+
+    final lines = <String>[];
+    for (final entry in urls.entries) {
+      try {
+        final res = await http.get(Uri.parse(entry.value)).timeout(const Duration(seconds: 10));
+        lines.add('${entry.key}: 成功 (狀態碼 ${res.statusCode})');
+      } catch (e) {
+        lines.add('${entry.key}: 失敗 — $e');
+      }
+    }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('網路診斷結果'),
+        content: Text(lines.join('\n\n')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('關閉')),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSuggestionSection(String label, List<String> suggestions, TextEditingController controller) {
     if (suggestions.isEmpty) return const SizedBox.shrink();
     return Column(
@@ -163,6 +194,10 @@ class _BusQueryPageState extends State<BusQueryPage> {
             ElevatedButton(
               onPressed: _isLoading ? null : _search,
               child: const Text('查詢'),
+            ),
+            TextButton(
+              onPressed: _runDiagnostics,
+              child: const Text('網路診斷(暫時除錯用)'),
             ),
             const SizedBox(height: 16),
             if (_isLoading) ...[
