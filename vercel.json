@@ -1,0 +1,4 @@
+{
+  "buildCommand": "echo 'web build is pre-built locally, see dist/'",
+  "outputDirectory": "dist"
+}

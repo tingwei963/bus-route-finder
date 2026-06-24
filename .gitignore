@@ -43,6 +43,3 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-
-# TDX 真實金鑰,不上傳;範本見 tdx_config.example.dart
-lib/services/tdx_config.dart

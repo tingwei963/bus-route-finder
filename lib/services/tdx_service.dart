@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'tdx_config.dart';
 
 /// 一筆符合條件的公車路線比對結果
 class RouteMatch {
@@ -28,11 +27,11 @@ class RouteSearchResult {
 
 /// 呼叫交通部 TDX 運輸資料流通服務 API 的服務類別
 ///
-/// Client ID / Secret 放在 tdx_config.dart(不會被 Git 追蹤),
-/// 範本見 tdx_config.example.dart。
+/// Token 透過後端 proxy(/api/token,見專案根目錄 api/token.js)取得,
+/// TDX 的 Client ID / Secret 只存在後端環境變數,前端程式完全不會碰到金鑰。
 class TdxService {
-  static const String _authUrl =
-      'https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token';
+  // 部署到 Vercel 後,把這個換成實際拿到的網域(例如 https://bus-route-finder.vercel.app)
+  static const String _proxyBase = 'https://YOUR-VERCEL-DOMAIN.vercel.app';
   static const String _apiBase = 'https://tdx.transportdata.tw/api/basic';
 
   // 公車路線常常跨縣市,所以查詢時把所有縣市的市公車,加上不分縣市的公路客運,全部一起查
@@ -74,18 +73,10 @@ class TdxService {
       return _cachedToken!;
     }
 
-    final response = await http.post(
-      Uri.parse(_authUrl),
-      headers: {'content-type': 'application/x-www-form-urlencoded'},
-      body: {
-        'grant_type': 'client_credentials',
-        'client_id': TdxConfig.clientId,
-        'client_secret': TdxConfig.clientSecret,
-      },
-    );
+    final response = await http.get(Uri.parse('$_proxyBase/api/token'));
 
     if (response.statusCode != 200) {
-      throw Exception('TDX 授權失敗(狀態碼 ${response.statusCode}),請確認 Client ID / Secret 是否正確');
+      throw Exception('取得授權失敗(狀態碼 ${response.statusCode}),請確認後端 proxy 是否部署成功');
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
