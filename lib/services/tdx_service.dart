@@ -12,16 +12,19 @@ class RouteMatch {
   String get directionLabel => direction == 0 ? '去程' : '返程';
 }
 
-/// 一次查詢的完整結果:符合的路線,以及查無結果時的「你是不是要找」建議站名
+/// 一次查詢的完整結果:符合的路線,查無結果時的「你是不是要找」建議站名,
+/// 以及這次查詢裡有哪些縣市/公路客運資料抓取失敗(結果可能因此不完整)
 class RouteSearchResult {
   final List<RouteMatch> matches;
   final List<String> startSuggestions;
   final List<String> endSuggestions;
+  final List<String> failedAreas;
 
   RouteSearchResult({
     required this.matches,
     required this.startSuggestions,
     required this.endSuggestions,
+    this.failedAreas = const [],
   });
 }
 
@@ -61,12 +64,14 @@ class TransferSearchResult {
   final List<String> startSuggestions;
   final List<String> endSuggestions;
   final bool possiblyIncomplete;
+  final List<String> failedAreas;
 
   TransferSearchResult({
     required this.matches,
     required this.startSuggestions,
     required this.endSuggestions,
     required this.possiblyIncomplete,
+    this.failedAreas = const [],
   });
 }
 
@@ -172,27 +177,59 @@ class TdxService {
     return _cachedToken!;
   }
 
-  /// 抓某個縣市的市公車路線站序資料,失敗時回空清單(不讓單一縣市出錯擋住整體查詢)
-  static Future<List<dynamic>> _fetchCity(String token, String cityCode) async {
-    final uri = Uri.parse('$_apiBase/v2/Bus/StopOfRoute/City/$cityCode?\$format=JSON');
-    final response = await http.get(uri, headers: {'authorization': 'Bearer $token'});
-    if (response.statusCode != 200) return [];
-    return jsonDecode(response.body) as List<dynamic>;
+  // 同一批市公車/公路客運資料短時間內不會變,快取起來可以大幅減少 API 呼叫次數,
+  // 避免使用者連續查詢時觸發 TDX 的流量限制(遇到限流,TDX 會直接回非 200,
+  // 之前的寫法會把這種情況跟「這個縣市真的沒有路線」混在一起,導致結果悄悄漏掉)
+  static const Duration _cacheTtl = Duration(minutes: 5);
+  static final Map<String, List<dynamic>> _routeCache = {};
+  static final Map<String, DateTime> _routeCacheTime = {};
+
+  static List<dynamic>? _cached(String key) {
+    final cachedAt = _routeCacheTime[key];
+    if (cachedAt == null || DateTime.now().difference(cachedAt) > _cacheTtl) return null;
+    return _routeCache[key];
   }
 
-  /// 抓公路客運(跨縣市)路線站序資料
-  static Future<List<dynamic>> _fetchInterCity(String token) async {
+  /// 抓某個縣市的市公車路線站序資料,失敗回傳 null(跟「查到但沒有路線」的空清單區分開來)
+  static Future<List<dynamic>?> _fetchCity(String token, String cityCode) async {
+    final cacheKey = 'city:$cityCode';
+    final cached = _cached(cacheKey);
+    if (cached != null) return cached;
+
+    final uri = Uri.parse('$_apiBase/v2/Bus/StopOfRoute/City/$cityCode?\$format=JSON');
+    final response = await http.get(uri, headers: {'authorization': 'Bearer $token'});
+    if (response.statusCode != 200) return null;
+
+    final data = jsonDecode(response.body) as List<dynamic>;
+    _routeCache[cacheKey] = data;
+    _routeCacheTime[cacheKey] = DateTime.now();
+    return data;
+  }
+
+  /// 抓公路客運(跨縣市)路線站序資料,失敗回傳 null
+  static Future<List<dynamic>?> _fetchInterCity(String token) async {
+    const cacheKey = 'intercity';
+    final cached = _cached(cacheKey);
+    if (cached != null) return cached;
+
     final uri = Uri.parse('$_apiBase/v2/Bus/StopOfRoute/InterCity?\$format=JSON');
     final response = await http.get(uri, headers: {'authorization': 'Bearer $token'});
-    if (response.statusCode != 200) return [];
-    return jsonDecode(response.body) as List<dynamic>;
+    if (response.statusCode != 200) return null;
+
+    final data = jsonDecode(response.body) as List<dynamic>;
+    _routeCache[cacheKey] = data;
+    _routeCacheTime[cacheKey] = DateTime.now();
+    return data;
   }
 
   /// 抓回使用者勾選的縣市(+可選的公路客運)的路線站序資料,合併成 (area, routes) 清單
-  /// 直達查詢與轉乘查詢都靠這個共用的抓取邏輯,確保兩者查到的是同一批資料
+  /// 直達查詢與轉乘查詢都靠這個共用的抓取邏輯,確保兩者查到的是同一批資料。
+  /// [failedAreas] 是呼叫端傳進來的空清單,抓取失敗的縣市/公路客運名稱會被加進去,
+  /// 讓 UI 可以提醒使用者「這些資料沒抓到,結果可能不完整」,而不是悄悄漏掉。
   static Future<List<MapEntry<String, List<dynamic>>>> _fetchAllRouteEntries({
     required List<String> cityCodes,
     required bool includeInterCity,
+    required List<String> failedAreas,
   }) async {
     final token = await _getAccessToken();
 
@@ -204,7 +241,17 @@ class TdxService {
       if (includeInterCity) _fetchInterCity(token).then((data) => MapEntry('公路客運', data)),
     ];
 
-    return Future.wait(futures);
+    final results = await Future.wait(futures);
+
+    final entries = <MapEntry<String, List<dynamic>>>[];
+    for (final result in results) {
+      if (result.value == null) {
+        failedAreas.add(result.key);
+      } else {
+        entries.add(MapEntry(result.key, result.value!));
+      }
+    }
+    return entries;
   }
 
   /// 查詢有經過 [startStation] 且接著經過 [endStation] 的公車路線
@@ -216,9 +263,11 @@ class TdxService {
     required String startStation,
     required String endStation,
   }) async {
+    final failedAreas = <String>[];
     final results = await _fetchAllRouteEntries(
       cityCodes: cityCodes,
       includeInterCity: includeInterCity,
+      failedAreas: failedAreas,
     );
 
     final matches = <RouteMatch>[];
@@ -261,6 +310,7 @@ class TdxService {
       matches: matches,
       startSuggestions: startSuggestions,
       endSuggestions: endSuggestions,
+      failedAreas: failedAreas,
     );
   }
 
@@ -281,9 +331,11 @@ class TdxService {
     required int minTransfers,
     required int maxTransfers,
   }) async {
+    final failedAreas = <String>[];
     final entries = await _fetchAllRouteEntries(
       cityCodes: cityCodes,
       includeInterCity: includeInterCity,
+      failedAreas: failedAreas,
     );
 
     final allStopNames = <String>{};
@@ -354,12 +406,22 @@ class TdxService {
 
             for (final stop in route.stops) {
               if (stop.seq <= boardSeq) continue;
-              if (visited.containsKey(stop.name)) continue;
 
-              expansions++;
-              if (expansions > _maxTransferExpansions) {
-                possiblyIncomplete = true;
-                break;
+              final alreadyVisited = visited.containsKey(stop.name);
+              final isEndCandidate =
+                  endNames.contains(stop.name) && leg >= minLegs && leg <= maxLegs;
+
+              // 中繼站(非終點)只探一次,避免組合爆炸;但終點站要讓「每一條」
+              // 有效路線都能各自留下一筆結果,不能因為別條路線先到就把其他路線擋掉,
+              // 不然像武功國小→師大分部這種有 30 條直達車的情況,只會剩 1 條
+              if (alreadyVisited && !isEndCandidate) continue;
+
+              if (!alreadyVisited) {
+                expansions++;
+                if (expansions > _maxTransferExpansions) {
+                  possiblyIncomplete = true;
+                  break;
+                }
               }
 
               final reached = _Reached(
@@ -371,11 +433,14 @@ class TdxService {
                 alightSeq: stop.seq,
                 parent: current,
               );
-              visited[stop.name] = reached;
-              nextFrontier.add(reached);
 
-              if (endNames.contains(stop.name) && leg >= minLegs && leg <= maxLegs) {
+              if (isEndCandidate) {
                 matches.add(_buildTransferMatch(reached));
+              }
+
+              if (!alreadyVisited) {
+                visited[stop.name] = reached;
+                nextFrontier.add(reached);
               }
             }
             if (possiblyIncomplete) break;
@@ -415,6 +480,7 @@ class TdxService {
       startSuggestions: startSuggestions,
       endSuggestions: endSuggestions,
       possiblyIncomplete: possiblyIncomplete,
+      failedAreas: failedAreas,
     );
   }
 

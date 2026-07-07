@@ -44,6 +44,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
   List<RouteMatch> _results = [];
   List<String> _startSuggestions = [];
   List<String> _endSuggestions = [];
+  List<String> _failedAreas = [];
 
   // 轉乘查詢專用的狀態,跟上面直達查詢的狀態完全分開,兩種模式互不干擾
   bool _isTransferLoading = false;
@@ -52,6 +53,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
   List<String> _transferStartSuggestions = [];
   List<String> _transferEndSuggestions = [];
   bool _transferPossiblyIncomplete = false;
+  List<String> _transferFailedAreas = [];
 
   @override
   void dispose() {
@@ -80,6 +82,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
       _results = [];
       _startSuggestions = [];
       _endSuggestions = [];
+      _failedAreas = [];
     });
 
     try {
@@ -93,6 +96,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
         _results = result.matches;
         _startSuggestions = result.startSuggestions;
         _endSuggestions = result.endSuggestions;
+        _failedAreas = result.failedAreas;
       });
     } catch (e) {
       setState(() => _errorMessage = e.toString());
@@ -115,8 +119,9 @@ class _BusQueryPageState extends State<BusQueryPage> {
       return;
     }
 
-    // 一次轉乘固定查 1 次轉乘;多次轉乘查 2~3 次轉乘(範圍越大越慢,設上限避免卡死)
-    final minTransfers = _mode == _SearchMode.oneTransfer ? 1 : 2;
+    // 兩個分頁都從 0 次轉乘(直達)開始算,不用另外切回「直達」分頁比對;
+    // 一次轉乘查到 1 次為止,多次轉乘查到 3 次為止(範圍越大越慢,設上限避免卡死)
+    final minTransfers = 0;
     final maxTransfers = _mode == _SearchMode.oneTransfer ? 1 : 3;
 
     setState(() {
@@ -126,6 +131,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
       _transferStartSuggestions = [];
       _transferEndSuggestions = [];
       _transferPossiblyIncomplete = false;
+      _transferFailedAreas = [];
     });
 
     try {
@@ -142,6 +148,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
         _transferStartSuggestions = result.startSuggestions;
         _transferEndSuggestions = result.endSuggestions;
         _transferPossiblyIncomplete = result.possiblyIncomplete;
+        _transferFailedAreas = result.failedAreas;
       });
     } catch (e) {
       setState(() => _transferErrorMessage = e.toString());
@@ -211,7 +218,7 @@ class _BusQueryPageState extends State<BusQueryPage> {
     return ListTile(
       leading: const Icon(Icons.directions_bus),
       title: Text(parts.join(' → ')),
-      subtitle: Text('${match.transferCount} 次轉乘'),
+      subtitle: Text(match.transferCount == 0 ? '直達' : '${match.transferCount} 次轉乘'),
     );
   }
 
@@ -303,6 +310,11 @@ class _BusQueryPageState extends State<BusQueryPage> {
               ],
               if (_errorMessage != null)
                 Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+              if (_failedAreas.isNotEmpty)
+                Text(
+                  '⚠️ ${_failedAreas.join('、')} 資料暫時無法取得(可能是 TDX 流量限制),結果可能不完整,建議稍後再查一次',
+                  style: const TextStyle(color: Colors.orange),
+                ),
               if (noResultsAtAll) const Text('輸入起訖站後按查詢,結果會列在這裡'),
               _buildSuggestionSection('起站', _startSuggestions, _startController),
               _buildSuggestionSection('迄站', _endSuggestions, _endController),
@@ -319,8 +331,15 @@ class _BusQueryPageState extends State<BusQueryPage> {
               ],
               if (_transferErrorMessage != null)
                 Text(_transferErrorMessage!, style: const TextStyle(color: Colors.red)),
+              if (_transferFailedAreas.isNotEmpty)
+                Text(
+                  '⚠️ ${_transferFailedAreas.join('、')} 資料暫時無法取得(可能是 TDX 流量限制),結果可能不完整,建議稍後再查一次',
+                  style: const TextStyle(color: Colors.orange),
+                ),
+              if (_mode == _SearchMode.oneTransfer)
+                const Text('查詢範圍:直達或轉乘 1 次', style: TextStyle(color: Colors.grey)),
               if (_mode == _SearchMode.multiTransfer)
-                const Text('查詢範圍:最多 3 次轉乘', style: TextStyle(color: Colors.grey)),
+                const Text('查詢範圍:直達至轉乘 3 次', style: TextStyle(color: Colors.grey)),
               if (_transferPossiblyIncomplete)
                 const Text('路網過大,結果可能不完整', style: TextStyle(color: Colors.orange)),
               if (noTransferResultsAtAll) const Text('輸入起訖站後按查詢,結果會列在這裡'),
