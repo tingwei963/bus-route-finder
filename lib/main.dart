@@ -26,6 +26,8 @@ class BusQueryPage extends StatefulWidget {
   State<BusQueryPage> createState() => _BusQueryPageState();
 }
 
+enum _SearchMode { direct, oneTransfer, multiTransfer }
+
 class _BusQueryPageState extends State<BusQueryPage> {
   final _startController = TextEditingController();
   final _endController = TextEditingController();
@@ -34,11 +36,22 @@ class _BusQueryPageState extends State<BusQueryPage> {
   final Set<String> _selectedCities = {'Taipei', 'NewTaipei'};
   bool _includeInterCity = true;
 
+  // 預設是直達查詢,跟新增轉乘功能前的行為完全一樣
+  _SearchMode _mode = _SearchMode.direct;
+
   bool _isLoading = false;
   String? _errorMessage;
   List<RouteMatch> _results = [];
   List<String> _startSuggestions = [];
   List<String> _endSuggestions = [];
+
+  // 轉乘查詢專用的狀態,跟上面直達查詢的狀態完全分開,兩種模式互不干擾
+  bool _isTransferLoading = false;
+  String? _transferErrorMessage;
+  List<TransferRouteMatch> _transferResults = [];
+  List<String> _transferStartSuggestions = [];
+  List<String> _transferEndSuggestions = [];
+  bool _transferPossiblyIncomplete = false;
 
   @override
   void dispose() {
@@ -85,6 +98,55 @@ class _BusQueryPageState extends State<BusQueryPage> {
       setState(() => _errorMessage = e.toString());
     } finally {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _searchTransfer() async {
+    final start = _startController.text.trim();
+    final end = _endController.text.trim();
+
+    if (start.isEmpty || end.isEmpty) {
+      setState(() => _transferErrorMessage = '請輸入起站與迄站名稱');
+      return;
+    }
+
+    if (_selectedCities.isEmpty && !_includeInterCity) {
+      setState(() => _transferErrorMessage = '請至少勾選一個縣市,或勾選公路客運');
+      return;
+    }
+
+    // 一次轉乘固定查 1 次轉乘;多次轉乘查 2~3 次轉乘(範圍越大越慢,設上限避免卡死)
+    final minTransfers = _mode == _SearchMode.oneTransfer ? 1 : 2;
+    final maxTransfers = _mode == _SearchMode.oneTransfer ? 1 : 3;
+
+    setState(() {
+      _isTransferLoading = true;
+      _transferErrorMessage = null;
+      _transferResults = [];
+      _transferStartSuggestions = [];
+      _transferEndSuggestions = [];
+      _transferPossiblyIncomplete = false;
+    });
+
+    try {
+      final result = await TdxService.findTransferRoutes(
+        cityCodes: _selectedCities.toList(),
+        includeInterCity: _includeInterCity,
+        startStation: start,
+        endStation: end,
+        minTransfers: minTransfers,
+        maxTransfers: maxTransfers,
+      );
+      setState(() {
+        _transferResults = result.matches;
+        _transferStartSuggestions = result.startSuggestions;
+        _transferEndSuggestions = result.endSuggestions;
+        _transferPossiblyIncomplete = result.possiblyIncomplete;
+      });
+    } catch (e) {
+      setState(() => _transferErrorMessage = e.toString());
+    } finally {
+      setState(() => _isTransferLoading = false);
     }
   }
 
@@ -138,6 +200,21 @@ class _BusQueryPageState extends State<BusQueryPage> {
     );
   }
 
+  Widget _buildTransferResultTile(TransferRouteMatch match) {
+    final parts = <String>[];
+    for (var i = 0; i < match.legs.length; i++) {
+      final leg = match.legs[i];
+      if (i == 0) parts.add(leg.boardStop);
+      parts.add('〔${leg.routeName} ${leg.directionLabel}〕');
+      parts.add(leg.alightStop);
+    }
+    return ListTile(
+      leading: const Icon(Icons.directions_bus),
+      title: Text(parts.join(' → ')),
+      subtitle: Text('${match.transferCount} 次轉乘'),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final noResultsAtAll = !_isLoading &&
@@ -146,6 +223,12 @@ class _BusQueryPageState extends State<BusQueryPage> {
         _startSuggestions.isEmpty &&
         _endSuggestions.isEmpty;
 
+    final noTransferResultsAtAll = !_isTransferLoading &&
+        _transferErrorMessage == null &&
+        _transferResults.isEmpty &&
+        _transferStartSuggestions.isEmpty &&
+        _transferEndSuggestions.isEmpty;
+
     return Scaffold(
       appBar: AppBar(title: const Text('公車起訖站查詢')),
       body: SingleChildScrollView(
@@ -153,6 +236,16 @@ class _BusQueryPageState extends State<BusQueryPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            SegmentedButton<_SearchMode>(
+              segments: const [
+                ButtonSegment(value: _SearchMode.direct, label: Text('直達')),
+                ButtonSegment(value: _SearchMode.oneTransfer, label: Text('一次轉乘')),
+                ButtonSegment(value: _SearchMode.multiTransfer, label: Text('多次轉乘')),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (selection) => setState(() => _mode = selection.first),
+            ),
+            const SizedBox(height: 12),
             const Text('查詢範圍(可多選,起訖站若跨縣市請都勾選)'),
             const SizedBox(height: 4),
             Wrap(
@@ -192,7 +285,9 @@ class _BusQueryPageState extends State<BusQueryPage> {
             ),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: _isLoading ? null : _search,
+              onPressed: _isLoading || _isTransferLoading
+                  ? null
+                  : (_mode == _SearchMode.direct ? _search : _searchTransfer),
               child: const Text('查詢'),
             ),
             TextButton(
@@ -200,21 +295,39 @@ class _BusQueryPageState extends State<BusQueryPage> {
               child: const Text('網路診斷(暫時除錯用)'),
             ),
             const SizedBox(height: 16),
-            if (_isLoading) ...[
-              const Center(child: CircularProgressIndicator()),
-              const SizedBox(height: 8),
-              const Text('查詢中,請稍候...'),
+            if (_mode == _SearchMode.direct) ...[
+              if (_isLoading) ...[
+                const Center(child: CircularProgressIndicator()),
+                const SizedBox(height: 8),
+                const Text('查詢中,請稍候...'),
+              ],
+              if (_errorMessage != null)
+                Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+              if (noResultsAtAll) const Text('輸入起訖站後按查詢,結果會列在這裡'),
+              _buildSuggestionSection('起站', _startSuggestions, _startController),
+              _buildSuggestionSection('迄站', _endSuggestions, _endController),
+              ..._results.map((route) => ListTile(
+                    leading: const Icon(Icons.directions_bus),
+                    title: Text(route.routeName),
+                    subtitle: Text('${route.area} · ${route.directionLabel}'),
+                  )),
+            ] else ...[
+              if (_isTransferLoading) ...[
+                const Center(child: CircularProgressIndicator()),
+                const SizedBox(height: 8),
+                const Text('查詢中,轉乘查詢較耗時,請稍候...'),
+              ],
+              if (_transferErrorMessage != null)
+                Text(_transferErrorMessage!, style: const TextStyle(color: Colors.red)),
+              if (_mode == _SearchMode.multiTransfer)
+                const Text('查詢範圍:最多 3 次轉乘', style: TextStyle(color: Colors.grey)),
+              if (_transferPossiblyIncomplete)
+                const Text('路網過大,結果可能不完整', style: TextStyle(color: Colors.orange)),
+              if (noTransferResultsAtAll) const Text('輸入起訖站後按查詢,結果會列在這裡'),
+              _buildSuggestionSection('起站', _transferStartSuggestions, _startController),
+              _buildSuggestionSection('迄站', _transferEndSuggestions, _endController),
+              ..._transferResults.map(_buildTransferResultTile),
             ],
-            if (_errorMessage != null)
-              Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
-            if (noResultsAtAll) const Text('輸入起訖站後按查詢,結果會列在這裡'),
-            _buildSuggestionSection('起站', _startSuggestions, _startController),
-            _buildSuggestionSection('迄站', _endSuggestions, _endController),
-            ..._results.map((route) => ListTile(
-                  leading: const Icon(Icons.directions_bus),
-                  title: Text(route.routeName),
-                  subtitle: Text('${route.area} · ${route.directionLabel}'),
-                )),
           ],
         ),
       ),
